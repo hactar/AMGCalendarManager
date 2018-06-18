@@ -13,9 +13,7 @@ public class AMGCalendarManager{
     
     public var calendar: EKCalendar? {
         get {
-            return eventStore.calendars(for: .event).filter { (element) in
-                return element.title == calendarName
-                }.first
+            return eventStore.defaultCalendarForNewEvents
         }
     }
     
@@ -39,7 +37,7 @@ public class AMGCalendarManager{
         case .notDetermined:
             var userAllowed = false
             eventStore.requestAccess(to: .event, completion: { (allowed, error) -> Void in
-                userAllowed = !allowed
+                userAllowed = allowed
                 if userAllowed {
                     self.reset()
                     if self.calendar == nil {
@@ -242,11 +240,11 @@ public class AMGCalendarManager{
     //MARK: - Privates
     
     private func createCalendar(commit: Bool = true, source: EKSource? = nil) -> NSError? {
-        let newCalendar = EKCalendar(for: .event, eventStore: self.eventStore)
-        newCalendar.title = self.calendarName
+        let newCalendar = self.eventStore.defaultCalendarForNewEvents!
+        // newCalendar.title = self.calendarName
         
         // defaultCalendarForNewEvents will always return a writtable source, even when there is no iCloud support.
-        newCalendar.source = source ?? self.eventStore.defaultCalendarForNewEvents.source
+        //newCalendar.source = source ?? self.eventStore.defaultCalendarForNewEvents?.source
         do {
             try self.eventStore.saveCalendar(newCalendar, commit: commit)
             return nil
@@ -263,7 +261,7 @@ public class AMGCalendarManager{
                         return nil
                     }
                 }
-                self.calendarName = self.eventStore.defaultCalendarForNewEvents.title
+                self.calendarName = (self.eventStore.defaultCalendarForNewEvents?.title)!
                 return error
             }
         }
