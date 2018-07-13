@@ -9,18 +9,66 @@ import EventKit
 
 public class AMGCalendarManager{
     public var eventStore = EKEventStore()
-    public var calendarName: String
     
-    public var calendar: EKCalendar? {
-        get {
-            return eventStore.defaultCalendarForNewEvents
+    
+    public func calendarTitles(completion: (([String]?, _ error:NSError?) -> ())? = nil) {
+        requestAuthorization() { [weak self] (allowed) in
+            guard let weakSelf = self else { return }
+            if !allowed {
+                completion?(nil, weakSelf.getDeniedAccessToCalendarError())
+                return
+            }
+            
+            let titles = weakSelf.eventStore.calendars(for: .event).map({ (calendar) -> String in
+                return calendar.title
+            })
+            completion?(titles, nil)
         }
     }
     
+    
+    
+    public func calendar(for title: String, completion: ((EKCalendar?, _ error:NSError?) -> ())? = nil) {
+        requestAuthorization() { [weak self] (allowed) in
+            guard let weakSelf = self else { return }
+            if !allowed {
+                completion?(nil, weakSelf.getDeniedAccessToCalendarError())
+                return
+            }
+            
+            var foundCal = false
+            for calendar in weakSelf.eventStore.calendars(for: .event) {
+                if calendar.title == title {
+                    completion?(calendar,nil)
+                    foundCal = true
+                    break
+                }
+            }
+            if foundCal == false {
+                completion?(nil, nil)
+            }
+            
+        }
+    }
+    
+    
+    
+    public func calendars(completion: (([EKCalendar]?, _ error:NSError?) -> ())? = nil) {
+        requestAuthorization() { [weak self] (allowed) in
+            guard let weakSelf = self else { return }
+            if !allowed {
+                completion?(nil, weakSelf.getDeniedAccessToCalendarError())
+                return
+            }
+            
+            completion?(weakSelf.eventStore.calendars(for: .event), nil)
+        }
+    }
+    
+    
     public static let shared = AMGCalendarManager()
     
-    public init(calendarName: String = Bundle.main.infoDictionary![kCFBundleNameKey as String] as! String){
-        self.calendarName = calendarName
+    public init(){
     }
     
     //MARK: - Authorization
@@ -28,9 +76,6 @@ public class AMGCalendarManager{
     public func requestAuthorization(completion: @escaping (_ allowed:Bool) -> ()){
         switch EKEventStore.authorizationStatus(for: EKEntityType.event) {
         case .authorized:
-            if self.calendar == nil {
-                _ = self.createCalendar()
-            }
             completion(true)
         case .denied:
             completion(false)
@@ -40,9 +85,6 @@ public class AMGCalendarManager{
                 userAllowed = allowed
                 if userAllowed {
                     self.reset()
-                    if self.calendar == nil {
-                        _ = self.createCalendar()
-                    }
                     completion(userAllowed)
                 } else {
                     completion(false)
@@ -55,28 +97,28 @@ public class AMGCalendarManager{
     
     //MARK: - Calendar
     
-    public func addCalendar(commit: Bool = true, completion: ((_ error:NSError?) -> ())? = nil) {
+    public func addCalendar(title: String, commit: Bool = true, completion: ((_ error:NSError?) -> ())? = nil) {
         requestAuthorization() { [weak self] (allowed) in
             guard let weakSelf = self else { return }
             if !allowed {
                 completion?(weakSelf.getDeniedAccessToCalendarError())
                 return
             }
-            let error = weakSelf.createCalendar(commit: commit)
+            let error = weakSelf.createCalendar(title: title, commit: commit)
             completion?(error)
         }
     }
     
-    public func removeCalendar(commit: Bool = true, completion: ((_ error:NSError?)-> ())? = nil) {
+    public func remove(calendar: EKCalendar, commit: Bool = true, completion: ((_ error:NSError?)-> ())? = nil) {
         requestAuthorization() { [weak self] (allowed) in
             guard let weakSelf = self else { return }
             if !allowed {
                 completion?(weakSelf.getDeniedAccessToCalendarError())
                 return
             }
-            if let cal = weakSelf.calendar, EKEventStore.authorizationStatus(for: EKEntityType.event) == .authorized {
+            if EKEventStore.authorizationStatus(for: EKEntityType.event) == .authorized {
                 do {
-                    try weakSelf.eventStore.removeCalendar(cal, commit: true)
+                    try weakSelf.eventStore.removeCalendar(calendar, commit: true)
                     completion?(nil)
                 } catch let error as NSError {
                     completion?(error)
@@ -88,7 +130,7 @@ public class AMGCalendarManager{
     
     //MARK: - New and update events
     
-    public func createEvent(completion: ((_ event:EKEvent?) -> Void)?) {
+    public func createEvent(calendar: EKCalendar?, completion: ((_ event:EKEvent?) -> Void)?) {
         
         requestAuthorization() { [weak self] (allowed) in
             guard let weakSelf = self else { return }
@@ -97,17 +139,15 @@ public class AMGCalendarManager{
                 return
             }
             
-            if let c = weakSelf.calendar {
-                let event = EKEvent(eventStore: weakSelf.eventStore)
-                event.calendar = c
-                completion?(event)
-                return
-            }
-            completion?(nil)
+            let c = calendar ?? weakSelf.eventStore.defaultCalendarForNewEvents
+            let event = EKEvent(eventStore: weakSelf.eventStore)
+            event.calendar = c
+            completion?(event)
+            return
         }
     }
     
-    public func saveEvent(event: EKEvent, span: EKSpan = .thisEvent, completion: ((_ error:NSError?) -> Void)? = nil) {
+    public func saveEvent(calendar: EKCalendar?, event: EKEvent, span: EKSpan = .thisEvent, completion: ((_ error:NSError?) -> Void)? = nil) {
         
         requestAuthorization() { [weak self] (allowed) in
             guard let weakSelf = self else { return }
@@ -126,7 +166,7 @@ public class AMGCalendarManager{
     
     //MARK: - Remove events
     
-    public func removeEvent(eventId: String, completion: ((_ error:NSError?)-> ())? = nil) {
+    public func removeEvent(calendar: EKCalendar?, eventId: String, completion: ((_ error:NSError?)-> ())? = nil) {
         requestAuthorization() { [weak self] (allowed) in
             guard let weakSelf = self else { return }
             if !allowed {
@@ -147,39 +187,17 @@ public class AMGCalendarManager{
         }
     }
     
-    public func removeAllEvents(filter: ((EKEvent) -> Bool)? = nil, completion: ((_ error:NSError?) -> ())? = nil){
-        requestAuthorization() { [weak self] (allowed) in
-            guard let weakSelf = self else { return }
-            if !allowed {
-                completion?(weakSelf.getDeniedAccessToCalendarError())
-                return
-            }
-            weakSelf.getAllEvents(completion: { (error, events) in
-                guard error == nil, let events = events else {
-                    completion?(weakSelf.getGeneralError())
-                    return
-                }
-                for event in events {
-                    if let f = filter, !f(event) {
-                        continue
-                    }
-                    _ = weakSelf.deleteEvent(event: event)
-                }
-                completion?(nil)
-            })
-        }
-    }
     
     //MARK: - Get events
     
-    public func getAllEvents(completion: ((_ error:NSError?, _ events:[EKEvent]?)-> ())?){
+    public func getAllEvents(calendar: EKCalendar?, completion: ((_ error:NSError?, _ events:[EKEvent]?)-> ())?){
         requestAuthorization() { [weak self] (allowed) in
             guard let weakSelf = self else { return }
             if !allowed {
                 completion?(weakSelf.getDeniedAccessToCalendarError(), nil)
                 return
             }
-            guard let c = weakSelf.calendar else {
+            guard let c = calendar ?? self?.eventStore.defaultCalendarForNewEvents else {
                 completion?(weakSelf.getGeneralError(),nil)
                 return
             }
@@ -213,14 +231,9 @@ public class AMGCalendarManager{
                 completion?(weakSelf.getDeniedAccessToCalendarError(), nil)
                 return
             }
-            if let c = weakSelf.calendar {
-                let pred = weakSelf.eventStore.predicateForEvents(withStart: startDate, end: endDate, calendars: [c])
-                completion?(nil, weakSelf.eventStore.events(matching: pred))
-            } else {
-                
-                completion?(weakSelf.getGeneralError(),nil)
-                
-            }
+            let pred = weakSelf.eventStore.predicateForEvents(withStart: startDate, end: endDate, calendars: nil)
+            completion?(nil, weakSelf.eventStore.events(matching: pred))
+            
             
         }
     }
@@ -239,12 +252,12 @@ public class AMGCalendarManager{
     
     //MARK: - Privates
     
-    private func createCalendar(commit: Bool = true, source: EKSource? = nil) -> NSError? {
+    private func createCalendar(title: String, commit: Bool = true, source: EKSource? = nil) -> NSError? {
         let newCalendar = self.eventStore.defaultCalendarForNewEvents!
-        // newCalendar.title = self.calendarName
+        newCalendar.title = title
         
         // defaultCalendarForNewEvents will always return a writtable source, even when there is no iCloud support.
-        //newCalendar.source = source ?? self.eventStore.defaultCalendarForNewEvents?.source
+        newCalendar.source = source ?? self.eventStore.defaultCalendarForNewEvents?.source
         do {
             try self.eventStore.saveCalendar(newCalendar, commit: commit)
             return nil
@@ -256,12 +269,11 @@ public class AMGCalendarManager{
                     if source.sourceType == .birthdays {
                         continue
                     }
-                    let err = createCalendar(source: source)
+                    let err = createCalendar(title: title, source: source)
                     if err == nil {
                         return nil
                     }
                 }
-                self.calendarName = (self.eventStore.defaultCalendarForNewEvents?.title)!
                 return error
             }
         }
